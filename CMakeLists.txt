@@ -3,9 +3,9 @@ cmake_minimum_required(VERSION 3.10)
 project(dht)
 
 option(ENABLE_TEST_COVERAGE "Enable code coverage" OFF)
-option(ENABLE_TESTS "Enable integration and unit tests" OFF)
+option(ENABLE_TESTS "Enable integration and unit tests" ON)
 option(ENABLE_LUA "Build lua bindings" OFF)
-option(ENABLE_DOC "Build documentation" ON)
+option(ENABLE_DOC "Build documentation" OFF)
 
 if(ENABLE_TEST_COVERAGE)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fprofile-arcs -ftest-coverage -DTEST_COVERAGE")
@@ -24,3 +24,4 @@ if(ENABLE_DOC)
 endif()
 
 add_subdirectory(lib)
+add_subdirectory(example)

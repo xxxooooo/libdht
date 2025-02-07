@@ -20,12 +20,22 @@ extern "C" {
 #endif
 
 #include <stdint.h>
-#ifdef _WIN32
+
+#if defined(_WIN32)
 typedef int socklen_t;
 #include <winsock2.h>
 #include <ws2ipdef.h>
-#else
+
+#elif defined(__APPLE__) || defined(__MACH__)
 #include <sys/socket.h>
+#include <sys/time.h>
+
+#elif defined(__linux__)
+#include <sys/socket.h>
+#include <sys/time.h>
+
+#else
+#error "Unsupported platform"
 #endif
 
 #include "bencode.h"

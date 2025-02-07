@@ -117,6 +117,8 @@ struct bvalue *bvalue_new_string(const unsigned char *s, size_t len);
  * \param val The value to copy.
  */
 struct bvalue *bvalue_copy(const struct bvalue *val);
+void bvalue_print(const struct bvalue *val);
+char* bvalue_to_json_string(const struct bvalue *val);
 /*!
  * Free bencoding value.
  *

@@ -26,6 +26,8 @@ typedef int socklen_t;
 #include <arpa/inet.h>
 #endif
 
+#include "log.h"
+
 /*!
  * Return the hexadecimal representation of a 160-bit value.
  *

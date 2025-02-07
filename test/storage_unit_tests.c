@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 
 #include <cmocka.h>
+// #include "/opt/homebrew/opt/cmocka/include/cmocka.h"
 
 #define TESTING 1
 struct dht_node;
@@ -101,10 +102,13 @@ static void announce_get_peers(void **state)
 
     args = bvalue_new_dict();
     bvalue_dict_set(args, "info_hash", bvalue_new_string(info_hash, 20));
+    bvalue_print(args);
     tok = NULL;
     expect_check(send_response, ret, check_token, &tok);
     handle_get_peers(node, tid, sizeof(tid), args,
                      (struct sockaddr *)&sin, sizeof(sin));
+    // dht_node_dump_buckets(node);
+    bvalue_print(tok);
     assert_non_null(tok);
     bvalue_free(args);
 

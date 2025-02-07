@@ -5,7 +5,8 @@ set(PUBLIC_HEADERS ${PUBLIC_HEADERS_DIR}/dht/bencode.h
                    ${PUBLIC_HEADERS_DIR}/dht/node.h
                    ${PUBLIC_HEADERS_DIR}/dht/peers.h
                    ${PUBLIC_HEADERS_DIR}/dht/put.h
-                   ${PUBLIC_HEADERS_DIR}/dht/utils.h)
+                   ${PUBLIC_HEADERS_DIR}/dht/utils.h
+                   ${PUBLIC_HEADERS_DIR}/dht/log.h)
 
 add_library(dht bencode.c
                 crc32c.c
@@ -25,6 +26,7 @@ add_library(dht bencode.c
                 time.c
                 time.h
                 utils.c
+                log.c
                 ed25519/add_scalar.c
                 ed25519/ed25519.h
                 ed25519/fe.c ed25519/fe.h

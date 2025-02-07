@@ -37,6 +37,12 @@ int debug_printf(const char *format, ...)
 {
     va_list ap;
     int ret;
+    time_t now;
+    char timestr[32];
+
+    time(&now);
+    strftime(timestr, sizeof(timestr), "%Y-%m-%d %H:%M:%S", localtime(&now));
+    fprintf(stderr, "[%s %s:%d] ", timestr, __FILE__, __LINE__);
 
     va_start(ap, format);
     ret = vfprintf(stderr, format, ap);
@@ -44,6 +50,11 @@ int debug_printf(const char *format, ...)
 
     return ret;
 }
+
+#define DHT_DEBUG
+void hexdump(const unsigned char *buf, size_t len, unsigned int indent,
+             int (*print)(const char *fmt, ...));
+
 
 #ifdef DHT_DEBUG
 #define TRACE(x) debug_printf x
@@ -78,10 +89,15 @@ static void send_query(struct dht_node *n, const char *method, uint16_t tid,
 
     rc = bencode_buf(query, buf, sizeof(buf));
     if (rc < 0) {
-        TRACE(("bencoding failed\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "bencoding failed\n");
         bvalue_free(query);
         return;
     }
+
+    char *json_str = bvalue_to_json_string(arguments);
+    DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "Sending query: tid: %d, method: %s, arguments: %s", tid, method, json_str);
+    free(json_str);
+
 
     n->output(buf, rc, dest, addrlen, n->opaque);
 
@@ -186,7 +202,7 @@ static void send_response(struct dht_node *n,
 
     rc = bencode_buf(response, buf, sizeof(buf));
     if (rc < 0) {
-        TRACE(("bencoding failed\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "bencoding failed\n");
         bvalue_free(response);
         return;
     }
@@ -229,7 +245,7 @@ static void send_error(struct dht_node *n,
 
     rc = bencode_buf(response, buf, sizeof(buf));
     if (rc < 0) {
-        TRACE(("bencoding failed\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "bencoding failed\n");
         bvalue_free(response);
         return;
     }
@@ -353,7 +369,7 @@ static void search_complete(struct dht_node *n, struct search *s)
 {
     struct search_node *sn = s->queue;
 
-    TRACE(("Search %s complete\n", hex(s->id)));
+    DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "Search %s complete\n", hex(s->id));
 
     if (s->callback)
         s->callback(n, sn, s->opaque);
@@ -473,8 +489,8 @@ static void search_progress(struct dht_node *n, struct search *s,
         sp = &sn->next;
     }
 
-    TRACE(("search %s: replied=%d, queried=%d\n", hex(s->id),
-           nreplied, nqueries));
+    DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "search %s: replied=%d, queried=%d\n", hex(s->id),
+           nreplied, nqueries);
 
     if (nqueries == 0) {
         struct bucket_entry *e = get_random_node(n);
@@ -505,7 +521,7 @@ int dht_node_search(struct dht_node *n, const unsigned char id[20],
 
     gettimeofday(&now, NULL);
 
-    TRACE(("Starting search for %s\n", hex(id)));
+    DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "Starting search for %s\n", hex(id));
 
     memcpy(s->id, id, 20);
     s->next_query = now;
@@ -693,8 +709,8 @@ static void update_prefix(struct dht_node *n, int notify)
     if (!memcmp(new_id, n->id, 20))
         return;
 
-    TRACE(("external IP address changed: %s, new node ID: %s\n",
-           compactaddr_fmt(current_ip, len), hex(new_id)));
+    DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "external IP address changed: %s, new node ID: %s\n",
+           compactaddr_fmt(current_ip, len), hex(new_id));
 
     memcpy(n->id, new_id, 20);
 
@@ -726,7 +742,8 @@ static void bootstrap_done(struct dht_node *n,
     (void)opaque;
     (void)nodes;
 
-    TRACE(("Bootstrap done\n"));
+    DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "Bootstrap done\n");
+
     n->bootstrap = NULL;
 
     update_prefix(n, 0);
@@ -775,6 +792,8 @@ int dht_node_init(struct dht_node *n, const unsigned char *id,
     n->bootstrap_cb = NULL;
     n->bootstrap_priv = NULL;
 
+    DHT_LOG_MESSAGE(LOG_LEVEL_WARN, "DHT node initialized successfully，id: %s\n", hex(n->id));
+
     return 0;
 }
 
@@ -789,7 +808,7 @@ static const struct {
 
 int dht_node_start(struct dht_node *n)
 {
-    TRACE(("Starting node %s\n", hex(n->id)));
+    DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "Starting node id: %s\n", hex(n->id));
 
     /* Routing table is empty, ping bootstrap nodes */
     if (n->buckets->next == NULL && n->buckets->cnt == 0) {
@@ -809,7 +828,7 @@ int dht_node_start(struct dht_node *n)
             int rc = getaddrinfo(hostname, NULL, &hints, &ai);
 
             if (rc) {
-                TRACE(("getaddrinfo %s: %s\n", hostname, gai_strerror(rc)));
+                DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "getaddrinfo %s: %s\n", hostname, gai_strerror(rc));
                 continue;
             }
 
@@ -825,8 +844,18 @@ int dht_node_start(struct dht_node *n)
                     continue;
                 }
 
-                TRACE(("Pinging %s...\n",
-                       p->ai_canonname ? p->ai_canonname : hostname));
+                char ip_str[INET6_ADDRSTRLEN];
+                if (p->ai_family == AF_INET) {
+                    struct sockaddr_in *addr_in = (struct sockaddr_in *)p->ai_addr;
+                    inet_ntop(AF_INET, &(addr_in->sin_addr), ip_str, sizeof(ip_str));
+                    DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "Pinging bootstrap node: %s, ipv4: %s\n",
+                       p->ai_canonname ? p->ai_canonname : hostname, ip_str);
+                } else if (p->ai_family == AF_INET6) {
+                    struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)p->ai_addr;
+                    inet_ntop(AF_INET6, &(addr_in6->sin6_addr), ip_str, sizeof(ip_str));
+                    DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "Pinging bootstrap node: %s, ipv6: %s\n",
+                       p->ai_canonname ? p->ai_canonname : hostname, ip_str);
+                }
                 dht_node_ping(n, p->ai_addr, p->ai_addrlen);
             }
 
@@ -935,7 +964,7 @@ static void bucket_gc(struct dht_node *n, struct bucket *b,
     for (i = 0; i < b->cnt; i++) {
         if (b->nodes[i].pinged >= 2 &&
             timercmp(&b->nodes[i].next_ping, now, <=)) {
-            TRACE(("removing bad node %s\n", hex(b->nodes[i].id)));
+            DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "removing bad node %s\n", hex(b->nodes[i].id));
             for (; i < b->cnt - 1; i++)
               b->nodes[i] = b->nodes[i + 1];
             b->cnt = i;
@@ -947,8 +976,8 @@ static void bucket_gc(struct dht_node *n, struct bucket *b,
     }
 
     if (timercmp(&oldest->next_ping, now, <=)) {
-        TRACE(("pinging old node %s (count=%d)\n", hex(oldest->id),
-               oldest->pinged));
+        DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "pinging old node %s (count=%d)\n", hex(oldest->id),
+               oldest->pinged);
         dht_node_ping(n, (struct sockaddr *)&oldest->addr, oldest->addrlen);
         oldest->pinged++;
         timeradd(now, &ping_timeout, &oldest->next_ping);
@@ -986,7 +1015,7 @@ static void add_node(struct dht_node *n, const unsigned char *id,
     if (b->cnt < BUCKET_ENTRY_MAX) {
         size_t j;
 
-        TRACE(("Adding node %s\n", hex(id)));
+        DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "Adding node %s\n", hex(id));
 
         i = 0;
         while (i < b->cnt && memcmp(id, b->nodes[i].id, 20) > 0)
@@ -1151,19 +1180,19 @@ static void handle_response(struct dht_node *n, struct bvalue *dict,
 
     v = bvalue_dict_get(dict, "t");
     if (!v) {
-        TRACE(("'t' key missing\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "'t' key missing\n");
         return;
     }
     p = bvalue_string(v, &l);
     if (!p || l != sizeof(tid)) {
-        TRACE(("invalid 't' key\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "'t' key missing\n");
         return;
     }
     tid = *(uint16_t *)p;
 
     r = bvalue_dict_get(dict, "r");
     if (!r) {
-        TRACE(("'r' key missing\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "'r' key missing\n");
         return;
     }
 
@@ -1174,12 +1203,12 @@ static void handle_response(struct dht_node *n, struct bvalue *dict,
 
     v = bvalue_dict_get(r, "id");
     if (!v) {
-        TRACE(("'r.id' key missing\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "'r.id' key missing\n");
         return;
     }
     id = (unsigned char *)bvalue_string(v, &l);
     if (!id || l != 20) {
-        TRACE(("invalid 'r.id' key\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "invalid 'r.id' key\n");
         return;
     }
 
@@ -1245,14 +1274,14 @@ static void handle_error(struct dht_node *n, struct bvalue *dict,
 
     e = bvalue_dict_get(dict, "e");
     if (!e) {
-        TRACE(("'e' key missing\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "'e' key missing\n");
         return;
     }
 
     if (!(v = bvalue_list_get(e, 0)) || bvalue_integer(v, &code) ||
         !(v = bvalue_list_get(e, 1)) ||
         !(msg = (char *)bvalue_string(v, NULL))) {
-        TRACE(("Malformed error message\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Malformed error message\n");
         return;
     }
 
@@ -1261,7 +1290,7 @@ static void handle_error(struct dht_node *n, struct bvalue *dict,
         ip_counter_update(&n->ip_counter, p, l) > 0)
         update_prefix(n, 1);
 
-    TRACE(("Error from %s: %d %s\n", sockaddr_fmt(src, addrlen), code, msg));
+    DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Error from %s: %d %s\n", sockaddr_fmt(src, addrlen), code, msg);
 
     if ((v = bvalue_dict_get(dict, "t")) &&
         (tid = (uint16_t *)bvalue_string(v, &l)) &&
@@ -1273,8 +1302,8 @@ static void handle_error(struct dht_node *n, struct bvalue *dict,
         while (sn) {
             if (sn->addrlen == addrlen &&
                 !sockaddr_cmp((struct sockaddr *)&sn->addr, src)) {
-                TRACE(("Marking node %s from pending search as errored\n",
-                       hex(sn->id)));
+                DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "Marking node %s from pending search as errored\n",
+                       hex(sn->id));
                 timerclear(&sn->reply_time);
                 if (sn->token) {
                     /* Make sure node doesn't get used for storage */
@@ -1442,12 +1471,12 @@ static int is_token_valid(struct dht_node *n, const unsigned char *token,
         return 0;
 
     if (memcmp(token + 8, signature, sizeof(signature))) {
-        TRACE(("Bad token: invalid signature\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Bad token: invalid signature\n");
         return 0;
     }
 
     if ((t + 600) < now) {
-        TRACE(("Bad token: expired\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Bad token: expired\n");
         return 0;
     }
 
@@ -1464,6 +1493,7 @@ static int add_peer(struct dht_node *n, const unsigned char *info_hash,
     while (pl) {
         if (!memcmp(pl->info_hash, info_hash, 20))
             break;
+        pl = pl->next;
     }
 
     if (!pl) {
@@ -1555,7 +1585,7 @@ static void handle_find_node(struct dht_node *n,
 
     if (!(v = bvalue_dict_get(args, "target")) ||
         !(target = (unsigned char *)bvalue_string(v, &l)) || l != 20) {
-        TRACE(("Invalid target\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Invalid target\n");
         send_error(n, tid, tid_len, 203, "Protocol Error", src, addrlen);
         return;
     }
@@ -1583,7 +1613,7 @@ static void handle_get_peers(struct dht_node *n,
 
     if (!(v = bvalue_dict_get(args, "info_hash")) ||
         !(info_hash = (unsigned char *)bvalue_string(v, &l)) || l != 20) {
-        TRACE(("Invalid info_hash\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Invalid info_hash\n");
         send_error(n, tid, tid_len, 203, "Protocol Error", src, addrlen);
         return;
     }
@@ -1621,7 +1651,7 @@ static void handle_announce_peer(struct dht_node *n,
          bvalue_integer(v, &implied_port)) ||
         (!implied_port && (!(v = bvalue_dict_get(args, "port")) ||
                            bvalue_integer(v, &port)))) {
-        TRACE(("Invalid argument\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Invalid argument\n");
         send_error(n, tid, tid_len, 203, "Protocol Error", src, addrlen);
         return;
     }
@@ -1673,7 +1703,7 @@ static void handle_get(struct dht_node *n,
 
     if (!(v = bvalue_dict_get(args, "target")) ||
         !(target = (unsigned char *)bvalue_string(v, &l)) || l != 20) {
-        TRACE(("Invalid target\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Invalid target\n");
         send_error(n, tid, tid_len, 203, "Protocol Error", src, addrlen);
         return;
     }
@@ -1781,7 +1811,7 @@ static void handle_put(struct dht_node *n,
         !(v = bvalue_dict_get(args, "token")) ||
         !(token = (unsigned char *)bvalue_string(v, &l)) || l != 28 ||
         !is_token_valid(n, token, src, addrlen)) {
-        TRACE(("Invalid argument\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Invalid argument\n");
         send_error(n, tid, tid_len, 203, "Protocol Error", src, addrlen);
         return;
     }
@@ -1804,7 +1834,7 @@ static void handle_put(struct dht_node *n,
              !(salt = bvalue_string(v, &l))) ||
             ((v = bvalue_dict_get(args, "cas")) &&
              (bvalue_integer(v, &cas) || cas < 0))) {
-            TRACE(("Invalid argument\n"));
+            DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Invalid argument\n");
             send_error(n, tid, tid_len, 203, "Protocol Error", src, addrlen);
             return;
         }
@@ -1824,7 +1854,7 @@ static void handle_put(struct dht_node *n,
             }
 
             if (!item) {
-                TRACE(("CAS mismatch\n"));
+                DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "CAS mismatch\n");
                 send_error(n, tid, tid_len, 301, "CAS mismatch", src, addrlen);
                 return;
             }
@@ -1838,7 +1868,7 @@ static void handle_put(struct dht_node *n,
             }
 
             if (item && item->seq > seq) {
-                TRACE(("Invalid sequence number\n"));
+                DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Invalid sequence number\n");
                 send_error(n, tid, tid_len, 302, "Invalid sequence number", src, addrlen);
                 return;
             }
@@ -1846,11 +1876,11 @@ static void handle_put(struct dht_node *n,
 
         switch (verify_value(val, salt, l, seq, k, sig)) {
         case -1:
-            TRACE(("Value too large\n"));
+            DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Value too large\n");
             send_error(n, tid, tid_len, 205, "Value too large", src, addrlen);
             return;
         case 0:
-            TRACE(("Invalid signature\n"));
+            DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Invalid signature\n");
             send_error(n, tid, tid_len, 206, "Invalid signature", src, addrlen);
             return;
         }
@@ -1863,7 +1893,7 @@ static void handle_put(struct dht_node *n,
         rc = bencode_buf(val, buf, sizeof(buf));
         if (rc < 0) {
             /* Value too large */
-            TRACE(("Value too large\n"));
+            DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Value too large\n");
             send_error(n, tid, tid_len, 205, "Value too large", src, addrlen);
             return;
         }
@@ -1896,7 +1926,7 @@ static void handle_query(struct dht_node *n, struct bvalue *dict,
         !(a = bvalue_dict_get(dict, "a")) ||
         !(v = bvalue_dict_get(a, "id")) ||
         !(id = (unsigned char *)bvalue_string(v, &l)) || l != 20) {
-        TRACE(("Malformed query\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Malformed query\n");
         send_error(n, tid, tid_len, 203, "Protocol Error", src, addrlen);
         return;
     }
@@ -1906,8 +1936,8 @@ static void handle_query(struct dht_node *n, struct bvalue *dict,
         ip_counter_update(&n->ip_counter, p, l) > 0)
         update_prefix(n, 1);
 
-    TRACE(("Got query %s from %s %s\n", query, hex(id),
-           sockaddr_fmt(src, addrlen)));
+    DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "Got query %s from %s %s\n", query, hex(id),
+           sockaddr_fmt(src, addrlen));
 
     e = get_bucket_entry(n, id);
     if (e) {
@@ -1933,13 +1963,13 @@ static void handle_query(struct dht_node *n, struct bvalue *dict,
     else if (!strcmp(query, "put"))
         handle_put(n, tid, tid_len, a, src, addrlen);
     else {
-        TRACE(("Unknown method: %s\n", query));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "Unknown method: %s\n", query);
         send_error(n, tid, tid_len, 204, "Method Unknown", src, addrlen);
     }
 }
 
-void hexdump(const unsigned char *buf, size_t len, unsigned int indent,
-             int (*print)(const char *fmt, ...));
+// void hexdump(const unsigned char *buf, size_t len, unsigned int indent,
+//              int (*print)(const char *fmt, ...));
 
 void dht_node_input(struct dht_node *n, const unsigned char *data, size_t len,
                     const struct sockaddr *src, socklen_t addrlen)
@@ -1950,7 +1980,7 @@ void dht_node_input(struct dht_node *n, const unsigned char *data, size_t len,
 
     dict = bdecode_buf(data, len);
     if (!dict) {
-        TRACE(("bdecode failed:\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "bdecode failed:\n");
 #ifdef DHT_DEBUG
         hexdump(data, len, 1, debug_printf);
 #endif
@@ -1959,12 +1989,12 @@ void dht_node_input(struct dht_node *n, const unsigned char *data, size_t len,
 
     v = bvalue_dict_get(dict, "y");
     if (!v) {
-        TRACE(("'y' key missing\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "'y' key missing\n");
         goto release;
     }
     msgtype = (char *)bvalue_string(v, NULL);
     if (!msgtype) {
-        TRACE(("'y' key not a string\n"));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "'y' key not a string\n");
         goto release;
     }
 
@@ -1975,7 +2005,7 @@ void dht_node_input(struct dht_node *n, const unsigned char *data, size_t len,
     } else if (!strcmp(msgtype, "e")) {
         handle_error(n, dict, src, addrlen);
     } else {
-        TRACE(("invalid message type: %s\n", msgtype));
+        DHT_LOG_MESSAGE(LOG_LEVEL_ERRO, "invalid message type: %s\n", msgtype);
     }
 
 release:
@@ -2111,7 +2141,7 @@ static void refresh_done(struct dht_node *n,
 
     b->refresh = NULL;
 
-    TRACE(("Refresh done\n"));
+    DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "Refresh done\n");
 }
 
 void dht_node_timeout(struct dht_node *n, struct timeval *tv)
@@ -2177,11 +2207,11 @@ void dht_node_work(struct dht_node *n)
         if (!b->refresh && timercmp(&b->refresh_time, &now, <=)) {
             unsigned char id[20];
 
-            TRACE(("Refreshing bucket %s", hex(b->first)));
+            DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "Refreshing bucket %s", hex(b->first));
             if (b->next)
-                TRACE(("-%s:\n", hex(b->next->first)));
+                DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, "-%s:\n", hex(b->next->first));
             else
-                TRACE((":\n"));
+                DHT_LOG_MESSAGE(LOG_LEVEL_DBUG, ":\n");
 
             bucket_random(b, id);
 

@@ -1,4 +1,11 @@
 find_package(CMocka REQUIRED)
+execute_process(
+    COMMAND brew --prefix cmocka
+    OUTPUT_VARIABLE CMOCKA_PATH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+include_directories("${CMOCKA_PATH}/include")
+link_directories("${CMOCKA_PATH}/lib")
 
 add_executable(hmac_unit_tests hmac_unit_tests.c)
 target_link_libraries(hmac_unit_tests dht cmocka)
